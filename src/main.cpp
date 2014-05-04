@@ -1,5 +1,6 @@
 // Copyright (c) 2009-2010 Satoshi Nakamoto
 // Copyright (c) 2009-2012 The Bitcoin developers
+// Copyright (c) 2012-14 The Votecoin developers
 // Distributed under the MIT/X11 software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
@@ -1077,42 +1078,64 @@ static const int64 nMinSubsidy = .0.0204010009765625 * COIN;
 
 int64 static GetBlockValue(int nHeight, int64 nFees)
 {
-    int64 nSubsidy = 1337 * COIN;
-    
-    // Subsidy is cut in half every 31337 blocks
-    nSubsidy >>= (nHeight / 31337);
+    int64 nSubsidy = nStartSubsidy;
+
+    // Mining phase: Subsidy is cut in half every SubsidyHalvingInterval
+    nSubsidy >>= (nHeight / Params().SubsidyHalvingInterval());
+    if(nHeight < 2000 ) {nSubsidy = .001 * COIN;} //Ease in to 0 diff.
+    // Inflation phase: Subsidy reaches minimum subsidy
+    // Network is rewarded for transaction processing with transaction fees and
+    // the inflationary subsidy
+    else if (nSubsidy < nMinSubsidy)
+    {
+        nSubsidy = nMinSubsidy;
+    }
 
     return nSubsidy + nFees;
 }
 
-static const int64 nTargetTimespan = 1 * 60; // minute
-static const int64 nTargetSpacing = 10 * 60;
-static const int64 nInterval = nTargetTimespan / nTargetSpacing;
+static const int64 nTargetTimespan = 3 * 60; // 3 minutes
+static const int64 nTargetSpacing = 60; // 30 seconds
+static const int64 nInterval = nTargetTimespan / nTargetSpacing; // 4 blocks
+
+static const int64 nAveragingInterval = nInterval * 20; // 80 blocks
+static const int64 nAveragingTargetTimespan = nAveragingInterval * nTargetSpacing; // 40 minutes
+
+static const int64 nMaxAdjustDown = 20; // 20% adjustment down
+static const int64 nMaxAdjustUp = 10; // 10% adjustment up
+
+static const int64 nTargetTimespanAdjDown = nTargetTimespan * (100 + nMaxAdjustDown) / 100;
 
 //
 // minimum amount of work that could possibly be required nTime after
 // minimum work required was nBase
 //
+
 unsigned int ComputeMinWork(unsigned int nBase, int64 nTime)
 {
+    const CBigNum &bnLimit = Params().ProofOfWorkLimit();
     // Testnet has min-difficulty blocks
     // after nTargetSpacing*2 time between blocks:
-    if (fTestNet && nTime > nTargetSpacing*2)
-        return bnProofOfWorkLimit.GetCompact();
+    if (TestNet() && nTime > nTargetSpacing*2)
+        return bnLimit.GetCompact();
 
     CBigNum bnResult;
     bnResult.SetCompact(nBase);
-    while (nTime > 0 && bnResult < bnProofOfWorkLimit)
+    while (nTime > 0 && bnResult < bnLimit)
     {
-        // Maximum 400% adjustment...
-        bnResult *= 4;
-        // ... in best-case exactly 4-times-normal target time
-        nTime -= nTargetTimespan*4;
+        // Maximum adjustment...
+        bnResult *= (100 + nMaxAdjustDown);
+        bnResult /= 100;
+        // ... in best-case exactly adjustment times-normal target time
+        nTime -= nTargetTimespanAdjDown;
     }
-    if (bnResult > bnProofOfWorkLimit)
-        bnResult = bnProofOfWorkLimit;
+    if (bnResult > bnLimit)
+        bnResult = bnLimit;
     return bnResult.GetCompact();
 }
+
+static const int64 nMinActualTimespan = nAveragingTargetTimespan * (100 - nMaxAdjustUp) / 100;
+static const int64 nMaxActualTimespan = nAveragingTargetTimespan * (100 + nMaxAdjustDown) / 100;
 
 unsigned int static GetNextWorkRequired(const CBlockIndex* pindexLast, const CBlockHeader *pblock)
 {
